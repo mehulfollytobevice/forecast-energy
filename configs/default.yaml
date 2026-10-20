@@ -1,0 +1,142 @@
+# Load-area PJM demand forecasting.
+
+project:
+  name: pjm-forecasting
+  seed: 42
+
+data:
+  history_start: "2018-01-01"
+  raw_dir: data/raw
+  processed_dir: data/processed
+  timezone: US/Eastern
+  freq: 1h
+
+horizon:
+  prediction_length: 48
+
+# Codes match pjm_forecasting.areas.LOAD_AREAS. Coordinates live in that module.
+load_areas:
+  - AECO
+  - VMEU
+  - BC
+  - DPLCO
+  - EASTON
+  - JC
+  - ME
+  - PE
+  - PEPCO
+  - SMECO
+  - PLCO
+  - UGI
+  - PN
+  - PS
+  - RECO
+  - AEPAPT
+  - AEPIMP
+  - AEPKPT
+  - AEPOPT
+  - AP
+  - OE
+  - PAPWR
+  - CE
+  - DAY
+  - DEOK
+  - DUQ
+  - EKPC
+  - OVEC
+  - DOM
+
+weather:
+  archive_url: https://archive-api.open-meteo.com/v1/archive
+  forecast_url: https://api.open-meteo.com/v1/forecast
+  timezone: UTC
+  temperature_unit: celsius
+  wind_speed_unit: ms
+  hourly:
+    - temperature_2m
+    - relative_humidity_2m
+    - wind_speed_10m
+    - shortwave_radiation
+    - surface_pressure
+
+frame:
+  target: load
+  keys:
+    - timestamp_utc
+    - load_area
+
+# Fatal quality checks reject a frame. Coverage fractions are logged and are not fatal.
+quality:
+  max_gap_hours: 6
+  load_min: 0
+
+# Half-open Eastern boundaries. Training includes 2024; validation includes 2025.
+splits:
+  train_end: "2025-01-01"
+  validation_end: "2026-01-01"
+
+# One XGBoost model per load area. OpenSTEF builds lags and calendar features.
+model:
+  type: xgboost
+  sample_interval_hours: 1
+  horizon: PT48H
+  quantiles: [0.1, 0.5, 0.9]
+  country_code: US
+  predict_history_days: 14
+  cutoff_history_days: 14
+  max_day_lags: 14
+  n_estimators: 100
+  validation_stride_hours: 24
+
+# Local MLflow. MLFLOW_TRACKING_URI overrides tracking_uri.
+storage:
+  tracking_uri: sqlite:///mlflow.db
+  artifact_location: artifacts/mlflow
+  local_artifacts_path: artifacts/mlflow-staging
+
+# ECMWF IFS HRES single runs. available_at = run_initialized_at + publication delay.
+forecast_runs:
+  url: https://single-runs-api.open-meteo.com/v1/forecast
+  model: ecmwf_ifs
+  archive_start: "2024-03-14T00:00:00Z"
+  cadence_hours: 6
+  publication_delay_hours: 6
+  # Hour-beginning metered load is treated as known one hour later.
+  load_availability_delay_hours: 1
+  workers: 4
+
+# Beam replays 2026 through the latest downloaded run and retrains as it goes.
+backtest:
+  start: "2026-01-01"
+  end: null
+  predict_interval_hours: 6
+  train_interval_days: 7
+  prediction_sample_interval_hours: 1
+  training_context_days: 90
+  predict_context_days: 14
+  min_coverage: 0.5
+  align_time: "00:00+00"
+
+# Live models train on ECMWF single-run weather (latest available per valid hour).
+forecast_training:
+  train_start: "2024-03-15"
+  validation_days: 90
+  # Publish only when new MAE is at most this multiple of the previous published MAE.
+  max_validation_mae_ratio: 1.25
+  weather_source: forecast_runs
+
+# Live forecast schedule (US/Eastern clock times). Cron fires hourly at :15 UTC
+# and the job exits unless the current Eastern HH:MM is listed here.
+live:
+  schedule_et:
+    - "05:15"
+    - "11:15"
+    - "17:15"
+    - "23:15"
+  wait_for_run_minutes: 45
+  poll_seconds: 60
+  snapshot_ttl_seconds: 30
+  stale_after_hours: 12
+  models_dir: data/models
+  recent_load_lookback_days: 28
+  recent_load_feed: auto

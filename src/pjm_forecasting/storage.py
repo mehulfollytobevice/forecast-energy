@@ -1,0 +1,142 @@
+"""Local or S3-compatible object storage for models, caches, and snapshots."""
+
+from __future__ import annotations
+
+import json
+import os
+import shutil
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+from dotenv import load_dotenv
+
+from pjm_forecasting.utils import ensure_dir, project_root
+
+
+@dataclass(frozen=True)
+class StorageConfig:
+    """Bucket credentials. Empty ``bucket`` means local filesystem mode."""
+
+    bucket: str
+    endpoint_url: str | None
+    access_key: str | None
+    secret_key: str | None
+    region: str
+    local_root: Path
+
+
+def load_storage_config(*, local_root: Path | str | None = None) -> StorageConfig:
+    load_dotenv(project_root() / ".env")
+    root = Path(local_root) if local_root is not None else project_root() / "data"
+    return StorageConfig(
+        bucket=os.environ.get("S3_BUCKET", "").strip(),
+        endpoint_url=os.environ.get("S3_ENDPOINT_URL", "").strip() or None,
+        access_key=os.environ.get("AWS_ACCESS_KEY_ID", "").strip() or None,
+        secret_key=os.environ.get("AWS_SECRET_ACCESS_KEY", "").strip() or None,
+        region=os.environ.get("AWS_DEFAULT_REGION", "us-east-1").strip() or "us-east-1",
+        local_root=Path(root),
+    )
+
+
+class ObjectStore:
+    """Thin wrapper: local ``data/`` when no bucket is configured, else S3."""
+
+    def __init__(self, config: StorageConfig | None = None) -> None:
+        self.config = config or load_storage_config()
+        self._client: Any = None
+
+    @property
+    def is_local(self) -> bool:
+        return not self.config.bucket
+
+    def _s3(self) -> Any:
+        if self._client is None:
+            import boto3
+
+            kwargs: dict[str, Any] = {"region_name": self.config.region}
+            if self.config.endpoint_url:
+                kwargs["endpoint_url"] = self.config.endpoint_url
+            if self.config.access_key and self.config.secret_key:
+                kwargs["aws_access_key_id"] = self.config.access_key
+                kwargs["aws_secret_access_key"] = self.config.secret_key
+            self._client = boto3.client("s3", **kwargs)
+        return self._client
+
+    def local_path(self, key: str) -> Path:
+        return self.config.local_root / key
+
+    def upload_file(self, local: Path | str, key: str) -> str:
+        source = Path(local)
+        if not source.is_file():
+            raise FileNotFoundError(source)
+        if self.is_local:
+            destination = self.local_path(key)
+            ensure_dir(destination.parent)
+            if source.resolve() != destination.resolve():
+                shutil.copy2(source, destination)
+            return str(destination)
+        self._s3().upload_file(str(source), self.config.bucket, key)
+        return f"s3://{self.config.bucket}/{key}"
+
+    def download_file(self, key: str, local: Path | str) -> Path:
+        destination = Path(local)
+        ensure_dir(destination.parent)
+        if self.is_local:
+            source = self.local_path(key)
+            if not source.is_file():
+                raise FileNotFoundError(f"missing local object {key}")
+            if source.resolve() != destination.resolve():
+                shutil.copy2(source, destination)
+            return destination
+        self._s3().download_file(self.config.bucket, key, str(destination))
+        return destination
+
+    def exists(self, key: str) -> bool:
+        if self.is_local:
+            return self.local_path(key).is_file()
+        try:
+            self._s3().head_object(Bucket=self.config.bucket, Key=key)
+            return True
+        except Exception:
+            return False
+
+    def read_json(self, key: str) -> dict[str, Any]:
+        if self.is_local:
+            path = self.local_path(key)
+            if not path.is_file():
+                raise FileNotFoundError(key)
+            return json.loads(path.read_text())
+        response = self._s3().get_object(Bucket=self.config.bucket, Key=key)
+        body = response["Body"].read()
+        return json.loads(body)
+
+    def write_json(self, key: str, payload: dict[str, Any]) -> str:
+        text = json.dumps(payload, indent=2, allow_nan=False) + "\n"
+        if self.is_local:
+            path = self.local_path(key)
+            ensure_dir(path.parent)
+            path.write_text(text)
+            return str(path)
+        self._s3().put_object(
+            Bucket=self.config.bucket,
+            Key=key,
+            Body=text.encode("utf-8"),
+            ContentType="application/json",
+        )
+        return f"s3://{self.config.bucket}/{key}"
+
+    def sync_prefix(self, local_dir: Path | str, key_prefix: str) -> int:
+        """Upload every file under ``local_dir`` into ``key_prefix``."""
+        root = Path(local_dir)
+        if not root.is_dir():
+            raise FileNotFoundError(root)
+        count = 0
+        for path in sorted(root.rglob("*")):
+            if not path.is_file():
+                continue
+            relative = path.relative_to(root).as_posix()
+            key = f"{key_prefix.rstrip('/')}/{relative}"
+            self.upload_file(path, key)
+            count += 1
+        return count

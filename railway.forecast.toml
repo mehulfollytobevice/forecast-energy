@@ -1,0 +1,8 @@
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+startCommand = "uv run python -m pjm_forecasting.jobs.forecast"
+cronSchedule = "15 * * * *"
+restartPolicyType = "NEVER"

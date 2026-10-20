@@ -1,0 +1,75 @@
+# Raw / large data (pull locally; never commit).
+# Ignore files, then re-include directories so the .gitkeep markers can be committed.
+data/**
+!data/**/
+!data/**/.gitkeep
+
+# Secrets / local env
+.env
+.env.*
+!.env.example
+*.pem
+credentials.json
+secrets/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+eggs/
+*.egg-info/
+.eggs/
+*.egg
+.venv/
+venv/
+.env/
+.conda/
+
+# Test / type / lint caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.tox/
+
+# MLflow / OpenSTEF local tracking.
+# configs/default.yaml uses artifacts/mlflow and artifacts/mlflow-staging,
+# which artifacts/ below already covers. The rest are the other local defaults.
+mlruns/
+mlflow.db
+mlflow.db-*
+mlflow/*.db
+mlflow/artifacts/
+mlflow/staging/
+mlflow_artifacts_local/
+
+# Prefect local state, if PREFECT_HOME is set inside the repo
+.prefect/
+
+# Node
+node_modules/
+
+# IDE / OS
+.idea/
+.vscode/
+.cursor/debug-*.log
+.cursor/
+*.swp
+.DS_Store
+
+# Model artifacts / checkpoints (regenerate via training)
+artifacts/
+checkpoints/
+*.ckpt
+*.pt
+*.pth
+
+# Jupyter
+.ipynb_checkpoints/
