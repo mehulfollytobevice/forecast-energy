@@ -262,9 +262,49 @@ See [`notebooks/README.md`](notebooks/README.md) for EDA, a single-area training
 
 ---
 
+## Deploy on Railway
+
+The dashboard, hourly forecast job, and weekly retrain job are one Railway project defined in [`.railway/railway.ts`](.railway/railway.ts) (Infrastructure as Code — Config as Code `railway.toml` is deprecated).
+
+| Service | Role |
+| --- | --- |
+| **web** | FastAPI + map UI (`Dockerfile` default command, healthcheck `/api/health`) |
+| **forecast** | Cron `15 * * * *` UTC; runs `python -m pjm_forecasting.jobs.forecast` and exits |
+| **retrain** | Cron `15 6 * * 1` UTC (Mondays); publishes a new model bundle |
+| **snapshots** | S3-compatible bucket shared by all three services |
+
+The forecast job still gates on Eastern `live.schedule_et` (`05:15`, `11:15`, `17:15`, `23:15`), so most hourly ticks exit with `skipped: schedule`.
+
+```bash
+npm install
+railway login
+railway link          # this GitHub repo / existing project
+railway config plan   # preview: web + forecast + retrain + snapshots bucket
+railway config apply  # creates/updates those resources — review the plan first
+```
+
+Then in the Railway dashboard:
+
+1. On **web**, generate a public domain. Open `https://<domain>/api/health` — expect `{"status":"ok"}`.
+2. Set `PJM_API_KEY` and `OPEN_METEO_API_KEY` on **web**, **forecast**, and **retrain** (or as shared variables). The IaC file uses `preserve()` so those values are not stored in git.
+3. Bucket credentials are wired automatically as `S3_BUCKET`, `S3_ENDPOINT_URL`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and `AWS_DEFAULT_REGION`.
+4. Publish models into the bucket (local `.env` with the same `S3_*` vars):
+   ```bash
+   PYTHONPATH=src python -m pjm_forecasting.jobs.retrain --bootstrap
+   ```
+5. Run one live forecast outside the Eastern schedule:
+   ```bash
+   PYTHONPATH=src python -m pjm_forecasting.jobs.forecast --now
+   ```
+   or temporarily set the **forecast** start command to that with `--now`, trigger a run, then restore the IaC start command.
+
+If **web** already exists from a GitHub deploy, rename it to `web` before applying so IaC updates that service instead of creating a duplicate. Do not add `railway.toml` / `railway.json` — new services cannot opt into Config as Code.
+
+---
+
 ## Status
 
-Working locally end-to-end: ingest → train → live forecast job → dashboard. Railway cron + object storage are sketched (`railway.forecast.toml` / `railway.retrain.toml`) for a later hosted refresh.
+Working locally end-to-end: ingest → train → live forecast job → dashboard. Hosted refresh is Railway IaC (`.railway/railway.ts`): web + forecast cron + retrain cron + object storage.
 
 ---
 

@@ -1,9 +1,0 @@
-[build]
-builder = "DOCKERFILE"
-dockerfilePath = "Dockerfile"
-
-[deploy]
-startCommand = "uv run python -m pjm_forecasting.jobs.retrain"
-# Mondays at 06:15 UTC (~02:15 ET).
-cronSchedule = "15 6 * * 1"
-restartPolicyType = "NEVER"

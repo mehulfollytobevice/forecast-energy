@@ -1,0 +1,9 @@
+{
+  "name": "forecast-energy",
+  "private": true,
+  "description": "Railway Infrastructure as Code for the PJM forecast project",
+  "type": "module",
+  "dependencies": {
+    "railway": "^3.16.0"
+  }
+}
