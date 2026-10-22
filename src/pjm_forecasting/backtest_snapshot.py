@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
@@ -19,7 +20,11 @@ from pjm_forecasting.settings import PipelineSettings, load_settings
 from pjm_forecasting.training import score_forecast
 from pjm_forecasting.utils import EASTERN, project_root
 
+if TYPE_CHECKING:
+    from pjm_forecasting.storage import ObjectStore
+
 DEFAULT_LEAD_HOURS = 1
+BACKTEST_SNAPSHOT_KEY = "snapshots/backtest/latest.json"
 
 
 def default_backtest_snapshot_path() -> Path:
@@ -418,3 +423,54 @@ def write_backtest_snapshot(
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text(json.dumps(payload, indent=2, allow_nan=False) + "\n")
     return destination
+
+
+def publish_backtest_snapshot(
+    area_frames: dict[str, pd.DataFrame] | None = None,
+    *,
+    store: ObjectStore | None = None,
+    path: Path | str | None = None,
+    settings: PipelineSettings | None = None,
+    lead_hours: int = DEFAULT_LEAD_HOURS,
+    generated_at: str | pd.Timestamp | None = None,
+    areas: list[str] | None = None,
+    fill_missing_from_fixture: bool = True,
+    fixture_path: Path | str | None = None,
+) -> dict[str, object]:
+    """Write the dashboard snapshot locally and upload it to object storage.
+
+    Object-store keys match the live forecast layout: ``snapshots/backtest/latest.json``
+    plus a timestamped archive copy.
+    """
+    from pjm_forecasting.storage import ObjectStore as Store
+
+    destination = write_backtest_snapshot(
+        area_frames,
+        path=path,
+        settings=settings,
+        lead_hours=lead_hours,
+        generated_at=generated_at,
+        areas=areas,
+        fill_missing_from_fixture=fill_missing_from_fixture,
+        fixture_path=fixture_path,
+    )
+    payload = json.loads(destination.read_text())
+    object_store = store if store is not None else Store()
+    object_store.write_json(BACKTEST_SNAPSHOT_KEY, payload)
+    generated = payload.get("generated_at")
+    archive_key: str | None = None
+    if isinstance(generated, str) and generated:
+        stamp = pd.Timestamp(generated)
+        if stamp.tzinfo is None:
+            stamp = stamp.tz_localize("UTC")
+        token = stamp.tz_convert("UTC").strftime("%Y%m%dT%H%MZ")
+        archive_key = f"snapshots/backtest/{token}.json"
+        object_store.write_json(archive_key, payload)
+    return {
+        "path": str(destination),
+        "key": BACKTEST_SNAPSHOT_KEY,
+        "archive_key": archive_key,
+        "generated_at": generated,
+        "start": payload.get("start"),
+        "end": payload.get("end"),
+    }

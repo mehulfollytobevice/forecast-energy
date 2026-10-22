@@ -30,6 +30,7 @@ _EXPORTS = {
     "build_backtest_snapshot": "pjm_forecasting.backtest_snapshot",
     "write_backtest_snapshot": "pjm_forecasting.backtest_snapshot",
     "resolve_backtest_snapshot": "pjm_forecasting.backtest_snapshot",
+    "publish_backtest_snapshot": "pjm_forecasting.backtest_snapshot",
 }
 
 

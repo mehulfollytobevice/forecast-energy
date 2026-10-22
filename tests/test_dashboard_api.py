@@ -13,11 +13,27 @@ from app.api.main import BACKTEST_FIXTURE, FIXTURE, app
 pytestmark = pytest.mark.usefixtures("monkeypatch")
 
 
+@pytest.fixture(autouse=True)
+def _clear_api_caches() -> None:
+    from app.api import main as api_main
+
+    api_main._FORECAST_CACHE.update({"payload": None, "fetched_at": 0.0})
+    api_main._BACKTEST_CACHE.update({"payload": None, "fetched_at": 0.0})
+
+
 @pytest.fixture
 def client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
     monkeypatch.setenv("FORECAST_SNAPSHOT", str(FIXTURE))
     monkeypatch.setenv("BACKTEST_SNAPSHOT", str(BACKTEST_FIXTURE))
     return TestClient(app)
+
+
+def _missing_object_store(monkeypatch: pytest.MonkeyPatch) -> None:
+    class MissingStore:
+        def read_json(self, key: str) -> dict:
+            raise FileNotFoundError(key)
+
+    monkeypatch.setattr("app.api.main.ObjectStore", lambda *_args, **_kwargs: MissingStore())
 
 
 def test_forecast_matches_fixture(client: TestClient) -> None:
@@ -42,6 +58,7 @@ def test_backtest_matches_fixture(client: TestClient) -> None:
 
 def test_backtest_falls_back_to_fixture(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.delenv("BACKTEST_SNAPSHOT", raising=False)
+    _missing_object_store(monkeypatch)
     missing = tmp_path / "missing_backtest.json"
 
     def _no_parquets(**_kwargs: object) -> dict:
@@ -62,11 +79,32 @@ def test_backtest_falls_back_to_fixture(monkeypatch: pytest.MonkeyPatch, tmp_pat
     assert response.json() == json.loads(BACKTEST_FIXTURE.read_text())
 
 
+def test_backtest_prefers_object_store(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("BACKTEST_SNAPSHOT", raising=False)
+    payload = {
+        "generated_at": "2026-10-18T00:00:00Z",
+        "lead_hours": 1,
+        "nodes": [{"id": "AECO", "level": "load_area", "p50": [1.0]}],
+    }
+
+    class Store:
+        def read_json(self, key: str) -> dict:
+            assert key == "snapshots/backtest/latest.json"
+            return payload
+
+    monkeypatch.setattr("app.api.main.ObjectStore", lambda *_args, **_kwargs: Store())
+    client = TestClient(app)
+    response = client.get("/api/backtest")
+    assert response.status_code == 200
+    assert response.json() == payload
+
+
 def test_backtest_merges_real_areas_over_fixture(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     monkeypatch.delenv("BACKTEST_SNAPSHOT", raising=False)
+    _missing_object_store(monkeypatch)
     import pandas as pd
 
     stamps = ["2026-01-03T00:00:00-05:00", "2026-01-03T01:00:00-05:00"]

@@ -231,6 +231,9 @@ python -c "from pjm_forecasting.flows.backtesting import backtest_load_areas; ba
 python -c "from pjm_forecasting.flows.backtesting import backtest_load_areas; backtest_load_areas(areas='AECO', skip_download=True)"
 
 PYTHONPATH=src python -c "from pjm_forecasting.backtest_snapshot import write_backtest_snapshot; print(write_backtest_snapshot())"
+
+# write JSON and upload snapshots/backtest/latest.json (Railway dashboard)
+PYTHONPATH=src python -m pjm_forecasting.jobs.backtest
 ```
 
 ### Predict from a published model
@@ -252,7 +255,7 @@ BACKTEST_SNAPSHOT=app/fixtures/backtest_snapshot.json \
 uv run uvicorn app.api.main:app --port 8000
 ```
 
-Then open `http://127.0.0.1:8000/`. Snapshot resolution for `/api/forecast`: object store `snapshots/forecast/latest.json` → `FORECAST_SNAPSHOT` → `data/processed/forecast_snapshot.json` → fixture.
+Then open `http://127.0.0.1:8000/`. Snapshot resolution for `/api/forecast`: object store `snapshots/forecast/latest.json` → `FORECAST_SNAPSHOT` → `data/processed/forecast_snapshot.json` → fixture. `/api/backtest` is the same order with `snapshots/backtest/latest.json` / `BACKTEST_SNAPSHOT`.
 
 ---
 
@@ -297,6 +300,10 @@ Then in the Railway dashboard:
    PYTHONPATH=src python -m pjm_forecasting.jobs.forecast --now
    ```
    or temporarily set the **forecast** start command to that with `--now`, trigger a run, then restore the IaC start command.
+6. Publish a backtest snapshot for the Backtest tab (needs Beam parquets under `data/processed/backtests/`):
+   ```bash
+   PYTHONPATH=src python -m pjm_forecasting.jobs.backtest
+   ```
 
 If **web** already exists from a GitHub deploy, rename it to `web` before applying so IaC updates that service instead of creating a duplicate. Do not add `railway.toml` / `railway.json` — new services cannot opt into Config as Code.
 

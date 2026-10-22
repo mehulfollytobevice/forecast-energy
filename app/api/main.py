@@ -13,7 +13,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from pjm_forecasting.backtest_snapshot import resolve_backtest_snapshot
+from pjm_forecasting.backtest_snapshot import BACKTEST_SNAPSHOT_KEY, resolve_backtest_snapshot
 from pjm_forecasting.settings import load_settings
 from pjm_forecasting.snapshot import default_snapshot_path
 from pjm_forecasting.storage import ObjectStore, load_storage_config
@@ -31,6 +31,7 @@ WEB_DIST = APP_DIR / "web" / "dist"
 app = FastAPI(title="PJM forecast dashboard", version="0.1.0")
 
 _FORECAST_CACHE: dict[str, Any] = {"payload": None, "fetched_at": 0.0}
+_BACKTEST_CACHE: dict[str, Any] = {"payload": None, "fetched_at": 0.0}
 
 
 def _unique_paths(paths: list[Path]) -> list[Path]:
@@ -107,23 +108,53 @@ def get_forecast() -> dict:
     return _load_forecast_snapshot()
 
 
+def _load_backtest_snapshot() -> dict:
+    """Prefer object store, then local parquets / processed snapshot, then fixture.
+
+    ``BACKTEST_SNAPSHOT`` short-circuits that order for tests and explicit overrides.
+    """
+    env = os.environ.get("BACKTEST_SNAPSHOT", "").strip()
+    if env:
+        return _load_json([Path(env)], kind="backtest")
+
+    ttl = _ttl_seconds()
+    now = time.time()
+    cached = _BACKTEST_CACHE.get("payload")
+    fetched_at = float(_BACKTEST_CACHE.get("fetched_at") or 0.0)
+    if cached is not None and now - fetched_at < ttl:
+        return cached
+
+    store = ObjectStore(load_storage_config())
+    try:
+        payload = store.read_json(BACKTEST_SNAPSHOT_KEY)
+        _BACKTEST_CACHE["payload"] = payload
+        _BACKTEST_CACHE["fetched_at"] = now
+        return payload
+    except FileNotFoundError:
+        pass
+    except Exception:
+        pass
+
+    try:
+        payload = resolve_backtest_snapshot(fixture_path=BACKTEST_FIXTURE)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except (ValueError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=500, detail=f"Invalid backtest snapshot: {exc}") from exc
+    _BACKTEST_CACHE["payload"] = payload
+    _BACKTEST_CACHE["fetched_at"] = now
+    return payload
+
+
 @app.get("/api/backtest")
 def get_backtest() -> dict:
     """Hierarchical backtest: actuals vs as-issued forecast over the test window.
 
     When ``BACKTEST_SNAPSHOT`` is set, that file is served as-is (tests and
-    explicit overrides). Otherwise real backtest parquets / processed snapshot
-    load areas win, and any remaining areas are filled from the fixture.
+    explicit overrides). Otherwise object-store ``snapshots/backtest/latest.json``
+    wins, then real backtest parquets / processed snapshot, then the fixture.
     """
-    env = os.environ.get("BACKTEST_SNAPSHOT", "").strip()
-    if env:
-        return _load_json([Path(env)], kind="backtest")
-    try:
-        return resolve_backtest_snapshot(fixture_path=BACKTEST_FIXTURE)
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    except (ValueError, json.JSONDecodeError) as exc:
-        raise HTTPException(status_code=500, detail=f"Invalid backtest snapshot: {exc}") from exc
+    return _load_backtest_snapshot()
 
 
 @app.get("/api/health")

@@ -9,16 +9,19 @@ import pandas as pd
 import pytest
 
 from pjm_forecasting.backtest_snapshot import (
+    BACKTEST_SNAPSHOT_KEY,
     area_frames_from_snapshot,
     build_backtest_snapshot,
     collapse_area_backtest,
     default_backtest_fixture_path,
     default_backtest_snapshot_path,
     merge_area_frames,
+    publish_backtest_snapshot,
     resolve_backtest_snapshot,
     select_lead_ahead,
     write_backtest_snapshot,
 )
+from pjm_forecasting.storage import ObjectStore, StorageConfig
 from pjm_forecasting.utils import project_root
 
 
@@ -123,3 +126,41 @@ def test_resolve_prefers_real_frames_and_fills_fixture(tmp_path: Path) -> None:
     assert by_key[("AECO", "load_area")]["p50"] == [51.0, 56.0]
     assert by_key[("BC", "load_area")]["p50"] == list(fixture_frames["BC"]["p50"])
     assert len(payload["nodes"]) == len(fixture["nodes"])
+
+
+def test_publish_backtest_snapshot_uploads_latest(tmp_path: Path) -> None:
+    stamps = pd.date_range("2026-01-03", periods=2, freq="h", tz="US/Eastern")
+    real = pd.DataFrame(
+        {
+            "timestamp": stamps,
+            "actual": [50.0, 55.0],
+            "p10": [40.0, 45.0],
+            "p50": [51.0, 56.0],
+            "p90": [60.0, 65.0],
+        }
+    )
+    store = ObjectStore(
+        StorageConfig(
+            bucket="",
+            endpoint_url=None,
+            access_key=None,
+            secret_key=None,
+            region="us-east-1",
+            local_root=tmp_path / "bucket",
+        )
+    )
+    result = publish_backtest_snapshot(
+        {"AECO": real},
+        store=store,
+        path=tmp_path / "backtest_snapshot.json",
+        generated_at="2026-01-04T12:00:00Z",
+        fill_missing_from_fixture=True,
+    )
+    assert result["key"] == BACKTEST_SNAPSHOT_KEY
+    assert result["archive_key"] == "snapshots/backtest/20260104T1200Z.json"
+    latest = store.read_json(BACKTEST_SNAPSHOT_KEY)
+    assert latest["lead_hours"] == 1
+    archive = store.read_json(str(result["archive_key"]))
+    by_key = {(n["id"], n["level"]): n for n in latest["nodes"]}
+    assert by_key[("AECO", "load_area")]["p50"] == [51.0, 56.0]
+    assert archive["generated_at"] == latest["generated_at"]
