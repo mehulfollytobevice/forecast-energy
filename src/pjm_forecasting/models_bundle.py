@@ -95,9 +95,11 @@ def publish_bundle(
     # Also keep a local copy under data/models for Phase 1.
     local_latest = store.local_path(f"{key_prefix.rstrip('/')}/latest.json")
     ensure_dir(local_latest.parent)
+    dest = local_latest.parent / path.name
     if not store.is_local:
         local_latest.write_text(json.dumps(payload, indent=2) + "\n")
-        shutil.copy2(path, local_latest.parent / path.name)
+        if path.resolve() != dest.resolve():
+            shutil.copy2(path, dest)
     return payload
 
 

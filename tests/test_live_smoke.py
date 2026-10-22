@@ -72,6 +72,22 @@ def test_already_published_idempotent(tmp_path: Path):
     assert not already_published(store, weather_run="r2", load_through="t1")
 
 
+def test_already_published_missing_latest(tmp_path: Path):
+    from pjm_forecasting.flows.live import already_published
+
+    store = ObjectStore(
+        StorageConfig(
+            bucket="",
+            endpoint_url=None,
+            access_key=None,
+            secret_key=None,
+            region="us-east-1",
+            local_root=tmp_path,
+        )
+    )
+    assert not already_published(store, weather_run="r1", load_through="t1")
+
+
 def test_build_forecast_snapshot_smoke():
     origin = pd.Timestamp("2026-06-01T12:00", tz="US/Eastern")
     payload = build_forecast_snapshot(

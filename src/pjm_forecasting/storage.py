@@ -14,6 +14,19 @@ from dotenv import load_dotenv
 from pjm_forecasting.utils import ensure_dir, project_root
 
 
+def _is_missing_key(exc: BaseException) -> bool:
+    """True when S3 (or a compatible store) says the object key is absent."""
+    if type(exc).__name__ in {"NoSuchKey", "NotFound"}:
+        return True
+    response = getattr(exc, "response", None)
+    if not isinstance(response, dict):
+        return False
+    code = str((response.get("Error") or {}).get("Code") or "")
+    if code in {"NoSuchKey", "NotFound", "404"}:
+        return True
+    return (response.get("ResponseMetadata") or {}).get("HTTPStatusCode") == 404
+
+
 @dataclass(frozen=True)
 class StorageConfig:
     """Bucket credentials. Empty ``bucket`` means local filesystem mode."""
@@ -107,7 +120,12 @@ class ObjectStore:
             if not path.is_file():
                 raise FileNotFoundError(key)
             return json.loads(path.read_text())
-        response = self._s3().get_object(Bucket=self.config.bucket, Key=key)
+        try:
+            response = self._s3().get_object(Bucket=self.config.bucket, Key=key)
+        except Exception as exc:
+            if _is_missing_key(exc):
+                raise FileNotFoundError(key) from exc
+            raise
         body = response["Body"].read()
         return json.loads(body)
 
