@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -12,6 +13,10 @@ from typing import Any
 from dotenv import load_dotenv
 
 from pjm_forecasting.utils import ensure_dir, project_root
+
+_CONNECT_TIMEOUT_S = 60
+_READ_TIMEOUT_S = 300
+_DOWNLOAD_ATTEMPTS = 3
 
 
 def _is_missing_key(exc: BaseException) -> bool:
@@ -25,6 +30,20 @@ def _is_missing_key(exc: BaseException) -> bool:
     if code in {"NoSuchKey", "NotFound", "404"}:
         return True
     return (response.get("ResponseMetadata") or {}).get("HTTPStatusCode") == 404
+
+
+def _is_canceled_request(exc: BaseException) -> bool:
+    """True when an S3 transfer aborted a GetObject (timeout or canceled sibling part)."""
+    name = type(exc).__name__
+    if name in {"RequestCanceled", "ReadTimeoutError", "ConnectTimeoutError", "EndpointConnectionError"}:
+        return True
+    response = getattr(exc, "response", None)
+    if isinstance(response, dict):
+        code = str((response.get("Error") or {}).get("Code") or "")
+        if code in {"RequestCanceled", "RequestTimeout"}:
+            return True
+    text = str(exc).lower()
+    return "request is canceled" in text or "read timeout" in text
 
 
 @dataclass(frozen=True)
@@ -66,8 +85,16 @@ class ObjectStore:
     def _s3(self) -> Any:
         if self._client is None:
             import boto3
+            from botocore.config import Config
 
-            kwargs: dict[str, Any] = {"region_name": self.config.region}
+            kwargs: dict[str, Any] = {
+                "region_name": self.config.region,
+                "config": Config(
+                    connect_timeout=_CONNECT_TIMEOUT_S,
+                    read_timeout=_READ_TIMEOUT_S,
+                    retries={"max_attempts": 8, "mode": "standard"},
+                ),
+            }
             if self.config.endpoint_url:
                 kwargs["endpoint_url"] = self.config.endpoint_url
             if self.config.access_key and self.config.secret_key:
@@ -102,8 +129,30 @@ class ObjectStore:
             if source.resolve() != destination.resolve():
                 shutil.copy2(source, destination)
             return destination
-        self._s3().download_file(self.config.bucket, key, str(destination))
-        return destination
+        from boto3.s3.transfer import TransferConfig
+
+        transfer = TransferConfig(
+            multipart_threshold=64 * 1024 * 1024,
+            multipart_chunksize=64 * 1024 * 1024,
+            max_concurrency=2,
+            num_download_attempts=8,
+        )
+        last_exc: Exception | None = None
+        for attempt in range(1, _DOWNLOAD_ATTEMPTS + 1):
+            try:
+                self._s3().download_file(
+                    self.config.bucket,
+                    key,
+                    str(destination),
+                    Config=transfer,
+                )
+                return destination
+            except Exception as exc:
+                last_exc = exc
+                if not _is_canceled_request(exc) or attempt >= _DOWNLOAD_ATTEMPTS:
+                    raise
+                time.sleep(2 ** attempt)
+        raise last_exc  # pragma: no cover
 
     def exists(self, key: str) -> bool:
         if self.is_local:
