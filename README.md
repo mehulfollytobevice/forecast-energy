@@ -6,6 +6,8 @@ PJM covers ~65 million people across 13 mid-Atlantic and Midwest states. Its loa
 
 This repository is an end-to-end load-forecasting system: data ingestion → feature frames → quantile models → hierarchical reconciliation → live snapshots → an interactive map dashboard. It is built as a portfolio project to demonstrate production-minded forecasting practice, not a toy notebook demo.
 
+You can find the app deployed here: [https://web-production-04d2f.up.railway.app/](https://web-production-04d2f.up.railway.app/)
+
 ---
 
 ## Why this problem
@@ -272,7 +274,7 @@ The dashboard, hourly forecast job, and weekly retrain job are one Railway proje
 | Service | Role |
 | --- | --- |
 | **web** | FastAPI + map UI (`Dockerfile` default command, healthcheck `/api/health`) |
-| **forecast** | Cron `15 * * * *` UTC; runs `python -m pjm_forecasting.jobs.forecast` and exits |
+| **forecast** | Cron `15 * * * `* UTC; runs `python -m pjm_forecasting.jobs.forecast` and exits |
 | **retrain** | Cron `15 6 * * 1` UTC (Mondays); publishes a new model bundle |
 | **snapshots** | S3-compatible bucket shared by all three services |
 
@@ -293,16 +295,17 @@ Then in the Railway dashboard:
 3. Bucket credentials are wired automatically as `S3_BUCKET`, `S3_ENDPOINT_URL`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and `AWS_DEFAULT_REGION`.
 4. Publish models into the bucket (local `.env` with the same `S3_*` vars):
    ```bash
-   PYTHONPATH=src python -m pjm_forecasting.jobs.retrain --bootstrap
+    PYTHONPATH=src python -m pjm_forecasting.jobs.retrain --bootstrap
    ```
 5. Run one live forecast outside the Eastern schedule:
    ```bash
-   PYTHONPATH=src python -m pjm_forecasting.jobs.forecast --now
+    PYTHONPATH=src python -m pjm_forecasting.jobs.forecast --now
    ```
-   or temporarily set the **forecast** start command to that with `--now`, trigger a run, then restore the IaC start command.
+
+    or temporarily set the **forecast** start command to that with `--now`, trigger a run, then restore the IaC start command.
 6. Publish a backtest snapshot for the Backtest tab (needs Beam parquets under `data/processed/backtests/`):
    ```bash
-   PYTHONPATH=src python -m pjm_forecasting.jobs.backtest
+    PYTHONPATH=src python -m pjm_forecasting.jobs.backtest
    ```
 
 If **web** already exists from a GitHub deploy, rename it to `web` before applying so IaC updates that service instead of creating a duplicate. Do not add `railway.toml` / `railway.json` — new services cannot opt into Config as Code.
