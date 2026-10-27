@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any
+
+os.environ.setdefault("PREFECT_SERVER_ANALYTICS_ENABLED", "false")
 
 import pandas as pd
 from prefect import flow, get_run_logger, task

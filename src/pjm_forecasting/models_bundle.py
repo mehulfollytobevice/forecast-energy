@@ -30,6 +30,64 @@ def _sqlite_path(tracking_uri: str) -> Path | None:
     return path
 
 
+def _is_local_artifact_uri(uri: str) -> bool:
+    if not uri:
+        return False
+    scheme = urlparse(uri).scheme
+    return scheme in {"", "file"} or (len(scheme) == 1 and scheme.isalpha())
+
+
+def remap_mlflow_artifact_uris(db_path: Path, artifact_root: Path) -> dict[str, Any]:
+    """Rewrite bundled MLflow file URIs so they point at this host's artifact root.
+
+    Training records absolute ``file://`` paths. Extracting the same SQLite DB on
+    another machine (for example Railway ``/repo``) leaves those paths dangling
+    even though the artifact files were copied next to the DB.
+    """
+    import sqlite3
+
+    new_root = artifact_root.resolve().as_uri().rstrip("/")
+    summary: dict[str, Any] = {
+        "new_root": new_root,
+        "updated_experiments": 0,
+        "updated_runs": 0,
+        "samples": [],
+    }
+    if not db_path.is_file():
+        return summary
+    conn = sqlite3.connect(str(db_path))
+    try:
+        for experiment_id, name, location in conn.execute(
+            "SELECT experiment_id, name, artifact_location FROM experiments"
+        ):
+            old = str(location or "")
+            if not _is_local_artifact_uri(old) or old.rstrip("/") == new_root:
+                continue
+            conn.execute(
+                "UPDATE experiments SET artifact_location = ? WHERE experiment_id = ?",
+                (new_root, experiment_id),
+            )
+            summary["updated_experiments"] += 1
+            if len(summary["samples"]) < 3:
+                summary["samples"].append({"name": name, "from": old, "to": new_root})
+        for run_uuid, uri in conn.execute("SELECT run_uuid, artifact_uri FROM runs"):
+            old = str(uri or "")
+            if not _is_local_artifact_uri(old):
+                continue
+            new_uri = f"{new_root}/{run_uuid}/artifacts"
+            if old.rstrip("/") == new_uri:
+                continue
+            conn.execute(
+                "UPDATE runs SET artifact_uri = ? WHERE run_uuid = ?",
+                (new_uri, run_uuid),
+            )
+            summary["updated_runs"] += 1
+        conn.commit()
+    finally:
+        conn.close()
+    return summary
+
+
 def package_bundle(
     *,
     settings: PipelineSettings | None = None,
@@ -133,6 +191,9 @@ def fetch_bundle(
         if db_src.is_file() and db_dst is not None:
             ensure_dir(db_dst.parent)
             shutil.copy2(db_src, db_dst)
+            remap = remap_mlflow_artifact_uris(db_dst, settings.artifact_location)
+        else:
+            remap = {"updated_experiments": 0, "updated_runs": 0, "new_root": None, "samples": []}
         artifacts_src = extract_root / "artifacts"
         if artifacts_src.is_dir():
             if settings.artifact_location.exists():
@@ -150,13 +211,15 @@ def fetch_bundle(
             shutil.copy2(band_src, band_dst)
         meta_path = extract_root / "bundle_meta.json"
         meta = json.loads(meta_path.read_text()) if meta_path.is_file() else {}
-    return {
+    result = {
         "version": version,
         "key": key,
         "band_scale_path": str(settings.models_dir / BAND_SCALE_NAME),
         "meta": meta,
         "latest": latest,
+        "remap": remap,
     }
+    return result
 
 
 def publish_archive_fallback(

@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import time
+
+os.environ.setdefault("PREFECT_SERVER_ANALYTICS_ENABLED", "false")
 
 from pjm_forecasting.flows.live import forecast_live
 from pjm_forecasting.schedule import should_run

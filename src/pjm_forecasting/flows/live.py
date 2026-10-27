@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import os
 import time
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
+
+os.environ.setdefault("PREFECT_SERVER_ANALYTICS_ENABLED", "false")
 
 import pandas as pd
 from prefect import flow, get_run_logger, task

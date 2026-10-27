@@ -19,6 +19,7 @@ export default defineRailway((ctx) => {
   const snapshots = bucket("snapshots", { region: "iad" });
 
   const pipelineEnv = {
+    PREFECT_SERVER_ANALYTICS_ENABLED: "false",
     PJM_API_KEY: preserve(),
     OPEN_METEO_API_KEY: preserve(),
     S3_BUCKET: ref(snapshots, "BUCKET"),
