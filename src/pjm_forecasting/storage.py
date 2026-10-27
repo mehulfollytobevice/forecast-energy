@@ -207,3 +207,45 @@ class ObjectStore:
             self.upload_file(path, key)
             count += 1
         return count
+
+    def download_prefix(self, key_prefix: str, local_dir: Path | str) -> int:
+        """Download every object under ``key_prefix`` into ``local_dir``."""
+        dest_root = Path(local_dir)
+        ensure_dir(dest_root)
+        prefix = key_prefix.rstrip("/") + "/"
+        if self.is_local:
+            source_root = self.local_path(key_prefix)
+            if not source_root.is_dir():
+                return 0
+            count = 0
+            for path in sorted(source_root.rglob("*")):
+                if not path.is_file():
+                    continue
+                dest = dest_root / path.relative_to(source_root)
+                ensure_dir(dest.parent)
+                if path.resolve() != dest.resolve():
+                    shutil.copy2(path, dest)
+                count += 1
+            return count
+        count = 0
+        token: str | None = None
+        while True:
+            kwargs: dict[str, Any] = {"Bucket": self.config.bucket, "Prefix": prefix}
+            if token:
+                kwargs["ContinuationToken"] = token
+            response = self._s3().list_objects_v2(**kwargs)
+            for item in response.get("Contents") or []:
+                key = str(item.get("Key") or "")
+                if not key or key.endswith("/"):
+                    continue
+                relative = key[len(prefix) :]
+                if not relative:
+                    continue
+                self.download_file(key, dest_root / relative)
+                count += 1
+            if not response.get("IsTruncated"):
+                break
+            token = response.get("NextContinuationToken")
+            if not token:
+                break
+        return count

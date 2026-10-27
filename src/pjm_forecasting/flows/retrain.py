@@ -30,12 +30,33 @@ from pjm_forecasting.storage import ObjectStore
 from pjm_forecasting.training import load_area_model, predict_quantiles, score_forecast
 from pjm_forecasting.utils import EASTERN, ensure_dir
 
+FORECAST_RUNS_PREFIX = "raw/forecast_runs"
+LOAD_AREAS_PREFIX = "raw/pjm/load_areas"
+
 
 def _log(message: str) -> None:
     try:
         get_run_logger().info(message)
     except Exception:
         print(message, flush=True)
+
+
+def hydrate_training_inputs(settings, store: ObjectStore) -> dict[str, int]:
+    """Pull bootstrap caches from object storage when the local dirs are empty."""
+    pred = settings.versioned_predictor_dir()
+    load_root = settings.raw_dir / "pjm" / "load_areas"
+    counts = {"forecast_runs": 0, "load_areas": 0}
+    if store.is_local:
+        return counts
+    pred_n = len(list(pred.glob("*.parquet"))) if pred.is_dir() else 0
+    if pred_n == 0:
+        counts["forecast_runs"] = store.download_prefix(FORECAST_RUNS_PREFIX, pred)
+        _log(f"hydrated {counts['forecast_runs']} forecast-run tables from {FORECAST_RUNS_PREFIX}")
+    load_n = len(list(load_root.glob("*/*.parquet"))) if load_root.is_dir() else 0
+    if load_n == 0:
+        counts["load_areas"] = store.download_prefix(LOAD_AREAS_PREFIX, load_root)
+        _log(f"hydrated {counts['load_areas']} load-area files from {LOAD_AREAS_PREFIX}")
+    return counts
 
 
 def build_forecast_training_frame(config_path: str | None = None):
@@ -197,6 +218,7 @@ def retrain_forecast_models(
     settings = load_settings(config_path)
     store = ObjectStore()
     ensure_dir(settings.models_dir)
+    hydrate_training_inputs(settings, store)
     if not skip_archive_fallback:
         try:
             publish_archive_fallback(settings=settings, store=store)
