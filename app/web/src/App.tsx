@@ -12,6 +12,7 @@ import {
 } from "./backtestWindow";
 import { FanChart } from "./FanChart";
 import { ForecastMap } from "./ForecastMap";
+import { SnapshotBrief } from "./SnapshotBrief";
 import { nodeKey } from "./format";
 import {
   buildNodeIndex,
@@ -221,14 +222,15 @@ export function App() {
 
   const tagline =
     tab === "live"
-      ? "Live daily forecast for the next 48 hours — drill the map or open a region below."
-      : "Pick a date range to compare backtested forecasts against actuals — hierarchy rolls up from load areas.";
+      ? "Next 48 hours of demand, with uncertainty bands and PJM’s official forecast as a baseline. Click the map or a chart title to drill from the full grid to a utility."
+      : "Issued forecasts versus what load actually was. Pick a date range; totals roll up from load areas to zones, regions, and PJM.";
+  const stale = isStaleForecast(live.generated_at);
 
   return (
     <main className="page">
       <header className="site-header">
         <div className="brand-block">
-          <p className="eyebrow">Eastern interconnection · short-term demand</p>
+          <p className="eyebrow">PJM Interconnection · short-term electricity demand</p>
           <h1 className="brand">
             <span className="brand-mark">PJM</span>
             <span className="brand-rest">Load forecast</span>
@@ -259,63 +261,7 @@ export function App() {
           </button>
         </div>
 
-        {tab === "live" ? (
-          <div className="meta-row" aria-label="Forecast timestamps">
-            <div className="meta-chip">
-              <span className="meta-label">Origin</span>
-              <span className="meta-value">{new Date(live.origin).toLocaleString()}</span>
-            </div>
-            <div className="meta-chip">
-              <span className="meta-label">Generated</span>
-              <span className="meta-value">
-                {new Date(live.generated_at).toLocaleString()}
-              </span>
-            </div>
-            {live.weather_run ? (
-              <div className="meta-chip">
-                <span className="meta-label">Weather run</span>
-                <span className="meta-value">{live.weather_run}</span>
-              </div>
-            ) : null}
-            {live.load_through ? (
-              <div className="meta-chip">
-                <span className="meta-label">Load through</span>
-                <span className="meta-value">
-                  {new Date(live.load_through).toLocaleString()}
-                </span>
-              </div>
-            ) : null}
-            {live.benchmark ? (
-              <div className="meta-chip">
-                <span className="meta-label">PJM forecast issued</span>
-                <span className="meta-value">
-                  {new Date(live.benchmark.issued_at).toLocaleString()}
-                </span>
-              </div>
-            ) : null}
-            {isStaleForecast(live.generated_at) ? (
-              <div className="meta-chip meta-chip-stale" role="status">
-                <span className="meta-label">Status</span>
-                <span className="meta-value">Stale (&gt;12h)</span>
-              </div>
-            ) : null}
-          </div>
-        ) : (
-          backtest && (
-            <div className="meta-row" aria-label="Backtest window">
-              <div className="meta-chip">
-                <span className="meta-label">Lead</span>
-                <span className="meta-value">{backtest.lead_hours}h-ahead</span>
-              </div>
-              <div className="meta-chip">
-                <span className="meta-label">Generated</span>
-                <span className="meta-value">
-                  {new Date(backtest.generated_at).toLocaleString()}
-                </span>
-              </div>
-            </div>
-          )
-        )}
+        <SnapshotBrief tab={tab} live={live} backtest={backtest} stale={stale} />
 
         <nav className="breadcrumb" aria-label="Hierarchy">
           {path.map((crumb, index) => (

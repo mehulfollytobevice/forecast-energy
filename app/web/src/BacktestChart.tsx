@@ -1,5 +1,9 @@
+import { useRef } from "react";
+
 import { formatDateKey } from "./backtestWindow";
-import { formatMw } from "./format";
+import { ChartTooltip, type TooltipRow } from "./ChartTooltip";
+import { usePlotHover } from "./chartHover";
+import { formatHoverTime, formatMw } from "./format";
 import type { BacktestNode } from "./types";
 
 const WIDTH = 960;
@@ -30,7 +34,17 @@ export function BacktestChart({
   leadHours,
   onSelect,
 }: BacktestChartProps) {
+  const svgRef = useRef<SVGSVGElement>(null);
   const n = node.timestamps.length;
+  const stride = n >= 2 ? Math.max(1, Math.ceil(n / MAX_POINTS)) : 1;
+  const displayCount = n >= 2 ? strideIndexes(n, stride).length : 0;
+  const { hoverIndex, onPointerMove, onPointerLeave } = usePlotHover(
+    svgRef,
+    WIDTH,
+    MARGIN.left,
+    PLOT_W,
+    displayCount,
+  );
   if (n < 2 || node.actuals.length !== n || node.p50.length !== n) {
     const availableLabel =
       availableStart && availableEnd
@@ -52,7 +66,6 @@ export function BacktestChart({
     );
   }
 
-  const stride = Math.max(1, Math.ceil(n / MAX_POINTS));
   const indexes = strideIndexes(n, stride);
   const times = indexes.map((i) => node.timestamps[i]);
   const actuals = indexes.map((i) => node.actuals[i]);
@@ -93,6 +106,10 @@ export function BacktestChart({
   const xTickIndexes = timeTickIndexes(m);
   const interactive = Boolean(onSelect);
   const metrics = node.metrics;
+  const hover =
+    hoverIndex !== null
+      ? hoverAt(hoverIndex, times, actuals, p50, p10, p90, leadHours)
+      : null;
 
   return (
     <article className={`fan${interactive ? " fan-interactive" : ""}`}>
@@ -139,12 +156,16 @@ export function BacktestChart({
           </div>
         )}
       </div>
-      <svg
-        viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
-        role="img"
-        aria-label={`${node.name} backtest actual versus forecast`}
-        className="fan-svg"
-      >
+      <div className="fan-plot">
+        <svg
+          ref={svgRef}
+          viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
+          role="img"
+          aria-label={`${node.name} backtest actual versus forecast`}
+          className="fan-svg"
+          onPointerMove={onPointerMove}
+          onPointerLeave={onPointerLeave}
+        >
         <rect
           x={MARGIN.left}
           y={MARGIN.top}
@@ -207,7 +228,40 @@ export function BacktestChart({
         {bandPath && <path d={bandPath} fill="rgba(37, 99, 235, 0.2)" stroke="none" />}
         <path d={linePath(actuals)} fill="none" stroke="#0f172a" strokeWidth="2" />
         <path d={linePath(p50)} fill="none" stroke="#1d4ed8" strokeWidth="2" />
-      </svg>
+        {hover && (
+          <g className="fan-crosshair" pointerEvents="none">
+            <line
+              x1={x(hover.index)}
+              x2={x(hover.index)}
+              y1={MARGIN.top}
+              y2={MARGIN.top + PLOT_H}
+              stroke="#0f172a"
+              strokeOpacity="0.35"
+              strokeWidth="1.25"
+            />
+            {hover.markers.map((marker) => (
+              <circle
+                key={marker.key}
+                cx={x(hover.index)}
+                cy={y(marker.value)}
+                r="4"
+                fill={marker.color}
+                stroke="#ffffff"
+                strokeWidth="1.5"
+              />
+            ))}
+          </g>
+        )}
+        </svg>
+        {hover && (
+          <ChartTooltip
+            leftPct={(x(hover.index) / WIDTH) * 100}
+            align={hover.index / Math.max(1, m - 1) > 0.55 ? "left" : "right"}
+            timestamp={formatHoverTime(hover.timestamp)}
+            rows={hover.rows}
+          />
+        )}
+      </div>
       <div className="fan-legend" aria-hidden="true">
         <span>
           <i className="swatch actual" /> Actual
@@ -223,6 +277,42 @@ export function BacktestChart({
       </div>
     </article>
   );
+}
+
+function hoverAt(
+  index: number,
+  times: string[],
+  actuals: number[],
+  p50: number[],
+  p10: number[] | null,
+  p90: number[] | null,
+  leadHours: number,
+): {
+  index: number;
+  timestamp: string;
+  rows: TooltipRow[];
+  markers: { key: string; value: number; color: string }[];
+} {
+  const rows: TooltipRow[] = [
+    { label: "Actual", value: formatMw(actuals[index]), swatch: "actual" },
+    { label: `P50 (${leadHours}h-ahead)`, value: formatMw(p50[index]), swatch: "p50" },
+  ];
+  if (p10 && p90) {
+    rows.push({
+      label: "P10–P90",
+      value: `${formatMw(p10[index])} – ${formatMw(p90[index])}`,
+      swatch: "band",
+    });
+  }
+  return {
+    index,
+    timestamp: times[index],
+    rows,
+    markers: [
+      { key: "actual", value: actuals[index], color: "#0f172a" },
+      { key: "p50", value: p50[index], color: "#1d4ed8" },
+    ],
+  };
 }
 
 function strideIndexes(n: number, stride: number): number[] {

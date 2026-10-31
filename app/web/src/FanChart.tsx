@@ -1,5 +1,9 @@
+import { useRef } from "react";
+
+import { ChartTooltip, type TooltipRow } from "./ChartTooltip";
+import { usePlotHover } from "./chartHover";
+import { formatHoverTime, formatMw } from "./format";
 import type { ForecastNode } from "./types";
-import { formatMw } from "./format";
 
 const WIDTH = 960;
 const HEIGHT = 280;
@@ -13,6 +17,7 @@ interface FanChartProps {
 }
 
 export function FanChart({ node, onSelect }: FanChartProps) {
+  const svgRef = useRef<SVGSVGElement>(null);
   const history = node.actuals;
   const forecast = node.p50;
   const p10 = node.p10;
@@ -23,6 +28,13 @@ export function FanChart({ node, onSelect }: FanChartProps) {
   const bandHigh = [...history, ...p90];
   const benchmark = node.benchmark?.length === forecast.length ? node.benchmark : null;
   const benchmarkValues = (benchmark ?? []).filter((v): v is number => v !== null);
+  const { hoverIndex, onPointerMove, onPointerLeave } = usePlotHover(
+    svgRef,
+    WIDTH,
+    MARGIN.left,
+    PLOT_W,
+    series.length,
+  );
 
   if (series.length < 2 || times.length !== series.length) {
     return <div className="fan empty">No series</div>;
@@ -71,6 +83,7 @@ export function FanChart({ node, onSelect }: FanChartProps) {
   const nextP50 = forecast[0] ?? series[series.length - 1];
   const nextBenchmark = benchmark?.[0] ?? null;
   const interactive = Boolean(onSelect);
+  const hover = hoverIndex !== null ? hoverAt(hoverIndex, split, node, times, benchmark) : null;
 
   return (
     <article className={`fan${interactive ? " fan-interactive" : ""}`}>
@@ -102,12 +115,16 @@ export function FanChart({ node, onSelect }: FanChartProps) {
           )}
         </div>
       </div>
-      <svg
-        viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
-        role="img"
-        aria-label={`${node.name} load forecast`}
-        className="fan-svg"
-      >
+      <div className="fan-plot">
+        <svg
+          ref={svgRef}
+          viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
+          role="img"
+          aria-label={`${node.name} load forecast`}
+          className="fan-svg"
+          onPointerMove={onPointerMove}
+          onPointerLeave={onPointerLeave}
+        >
         {/* Plot frame */}
         <rect
           x={MARGIN.left}
@@ -242,7 +259,41 @@ export function FanChart({ node, onSelect }: FanChartProps) {
             </text>
           </g>
         )}
-      </svg>
+
+        {hover && (
+          <g className="fan-crosshair" pointerEvents="none">
+            <line
+              x1={x(hover.index)}
+              x2={x(hover.index)}
+              y1={MARGIN.top}
+              y2={MARGIN.top + PLOT_H}
+              stroke="#0f172a"
+              strokeOpacity="0.35"
+              strokeWidth="1.25"
+            />
+            {hover.markers.map((marker) => (
+              <circle
+                key={marker.key}
+                cx={x(hover.index)}
+                cy={y(marker.value)}
+                r="4"
+                fill={marker.color}
+                stroke="#ffffff"
+                strokeWidth="1.5"
+              />
+            ))}
+          </g>
+        )}
+        </svg>
+        {hover && (
+          <ChartTooltip
+            leftPct={(x(hover.index) / WIDTH) * 100}
+            align={hover.index / (series.length - 1) > 0.55 ? "left" : "right"}
+            timestamp={formatHoverTime(hover.timestamp)}
+            rows={hover.rows}
+          />
+        )}
+      </div>
       <div className="fan-legend" aria-hidden="true">
         <span>
           <i className="swatch actual" /> Actual
@@ -261,6 +312,47 @@ export function FanChart({ node, onSelect }: FanChartProps) {
       </div>
     </article>
   );
+}
+
+function hoverAt(
+  index: number,
+  split: number,
+  node: ForecastNode,
+  times: string[],
+  benchmark: (number | null)[] | null,
+): {
+  index: number;
+  timestamp: string;
+  rows: TooltipRow[];
+  markers: { key: string; value: number; color: string }[];
+} {
+  const rows: TooltipRow[] = [];
+  const markers: { key: string; value: number; color: string }[] = [];
+
+  if (index < split) {
+    const actual = node.actuals[index];
+    rows.push({ label: "Actual", value: formatMw(actual), swatch: "actual" });
+    markers.push({ key: "actual", value: actual, color: "#0f172a" });
+  } else {
+    const fi = index - split;
+    const p50 = node.p50[fi];
+    const p10 = node.p10[fi];
+    const p90 = node.p90[fi];
+    rows.push({ label: "P50 forecast", value: formatMw(p50), swatch: "p50" });
+    rows.push({
+      label: "P10–P90",
+      value: `${formatMw(p10)} – ${formatMw(p90)}`,
+      swatch: "band",
+    });
+    markers.push({ key: "p50", value: p50, color: "#1d4ed8" });
+    const bench = benchmark?.[fi];
+    if (bench != null) {
+      rows.push({ label: "PJM forecast", value: formatMw(bench), swatch: "benchmark" });
+      markers.push({ key: "benchmark", value: bench, color: "#ea580c" });
+    }
+  }
+
+  return { index, timestamp: times[index], rows, markers };
 }
 
 function formatAxisMw(value: number): string {
